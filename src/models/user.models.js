@@ -49,7 +49,7 @@ const userSchema = new mongoose.Schema({
 userSchema.pre("save", async function (next) {
     if( !this.isModified("password"))   return next();
 
-    this.password = bcrypt.hash(this.password,10)
+    this.password = await bcrypt.hash(this.password,10)
     next()
 }) // bcrypt may take so we use async and since callback funtion does not have access to this pointer that's why we use function
 

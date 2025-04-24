@@ -163,8 +163,8 @@ const logoutUser = asyncHandler(async (req,res) => {
     await User.findByIdAndUpdate(
         req.user._id,
         {
-            $set: {
-                refreshToken: undefined
+            $unset: {
+                refreshToken: 1
             }
         },
         {
@@ -183,7 +183,7 @@ const logoutUser = asyncHandler(async (req,res) => {
 })
 
 const refreshAccessToken = asyncHandler(async (req,res) => {
-    const incomingRefreshToken = req.cookie.refreshToken || req.body.refreshToken
+    const incomingRefreshToken = req.cookie?.refreshToken || req.body?.refreshToken
     if (!incomingRefreshToken) {
         throw new ApiError(401, "Unauthorized Token")
     }
@@ -194,7 +194,7 @@ const refreshAccessToken = asyncHandler(async (req,res) => {
             process.env.REFRESH_TOKEN_SECRET
         )
     
-        const user = User.findById(decodedToken?._id)
+        const user = await User.findById(decodedToken?._id)
         if (!user) {
             throw new ApiError(401, "Invalid refresh token")
         }
@@ -236,21 +236,24 @@ const changePassword = asyncHandler(async (req,res) => {
 
     user.password = newPassword
     await user.save({validateBeforeSave: false})
+    return res.status(200)
+    .json(new ApiResponse(200, {}, "Password updated successfully"))
 })
 
 const getCurrUser = asyncHandler(async (req,res) => {
     return res
     .status(200)
-    .json(200 , req.user , "current user fetched successfully")
+    .json(new ApiResponse(200 , req.user , "current user fetched successfully"))
 })
 
 const updateAccDetails = asyncHandler(async (req,res) => {
-    const {fullName , email} = req.body
+    console.log("HI")
+    const { fullName, email } = req.body
     if (!fullName || !email) {
         throw new ApiError(400, "All Fields are required")
     }
 
-    const user = User.findByIdAndUpdate(
+    const user = await User.findByIdAndUpdate(
         req.user?._id,
         {
             $set: {
@@ -260,6 +263,10 @@ const updateAccDetails = asyncHandler(async (req,res) => {
         },
         {new: true}
     ).select("-password")
+    if(!user){
+        throw new ApiError(404, "User not found")
+    }
+    console.log(user)
 
     return res
     .status(200)
@@ -316,6 +323,130 @@ const updateUserCoverImage = asyncHandler(async(req,res) => {
     .status(200)
     .json(new ApiResponse(200, user, "CoverImage changed successfully"))
 })
+
+const getUserChannelProfile = asyncHandler(async(req,res) => {
+    const {username} = req.params //channel name is always lies in url ie /chai-aur-code
+
+    if(!username?.trim()){
+        throw new ApiError(400, "username is missing")
+    }
+
+    //User.find({username}) can also write like this but we can use $match operator
+
+
+    //now in this written code .aggregate return a array consisting of 
+    //objects but here the array will only contain one object that is of username
+    const channel = await User.aggregate([
+        {
+            $match: {
+                username: username?.toLowerCase()
+            }
+        },
+        {
+            $lookup: {
+                from: "subscriptions",
+                localField: "_id",
+                foreignField: "channel",
+                as: "subscribers"
+            }
+        },
+        {
+            $lookup: {
+                from: "subscriptions",
+                localField: "_id",
+                foreignField: "subscriber",
+                as: "subscribedTo"
+            }
+        },
+        {
+            $addFields: {
+                subscribersCount: {
+                    $size: "$subscribers"
+                },
+                channelSubscribedToCount: {
+                    $size: "subscribedTo"
+                },
+                isSubscribed: {
+                    $cond: {
+                        if: {$in: [req.user?._id, "$subscribers.subscriber"]},
+                        then: true,
+                        else: false
+                    }
+                }
+            }
+        },
+        {
+            $project: {
+                fullName: 1,
+                username: 1,
+                subscribersCount: 1,
+                channelSubscribedToCount: 1,
+                isSubscribed: 1,
+                avatar: 1,
+                coverImage: 1,
+            }
+        }
+    ])
+    if(!channel?.length){
+        throw new ApiError(404, "channel does not exists")
+    }
+
+    return res.status(200)
+    .json(
+        new ApiResponse(200, channel[0], "User Channel fetched successfully")
+    )
+})
+
+const getWatchHistory = asyncHandler(asyncHandler(async (req,res) => {
+    const user = await User.aggregate([
+        {
+            $match: {
+                _id: new mongoose.Types.ObjectId(req.user._id)
+            }
+        },
+        {
+            $lookup: {
+                from: "videos",
+                localField: "watchHistory",
+                foreignField: "_id",
+                as: "watchHistory",
+                pipeline: [
+                    {
+                        $lookup: {
+                            from: "users",
+                            localField: "owner",
+                            foreignField: "_id",
+                            as: "owner",
+                            pipeline: [
+                                {
+                                    $project: {
+                                        fullName: 1,
+                                        avatar: 1,
+                                        username: 1
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    {
+                        $addFields: {
+                            owner: {
+                                $first: "$owner"
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    ])
+
+    return res
+    .status(200)
+    .json(
+        new ApiResponse(200,user[0].watchHistory)
+    )
+}))
+
 export { 
     registerUser,
     loginUser,
@@ -325,5 +456,7 @@ export {
     getCurrUser,
     updateAccDetails,
     updateUserAvatar,
-    updateUserCoverImage
+    updateUserCoverImage,
+    getUserChannelProfile,
+    getWatchHistory
 }
